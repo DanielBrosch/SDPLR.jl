@@ -54,12 +54,12 @@ function simple_lowrank_model()
             [MOI.TriangleVectorization(A)],
         ),
     )
-    c = MOI.add_constraint(model, X[4], MOI.EqualTo(1.0))
+    c = MOI.add_constraint(model, 1.0 * X[1], MOI.EqualTo(1.0))
     MOI.set(model, MOI.ObjectiveSense(), MOI.MIN_SENSE)
-    obj = 1.0 * X[1] + 1.0 * X[3]
+    obj = 1.0 * X[2] + 1.0 * X[4]
     MOI.set(model, MOI.ObjectiveFunction{typeof(obj)}(), obj)
     @test MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMIZE_NOT_CALLED
-    return model, X[1:3], c
+    return model, X[2:4], c
 end
 
 function simple_test(model, X, c)
@@ -76,14 +76,14 @@ function simple_test(model, X, c)
     @test σ ≈ sigma
 end
 
-@testset "MOI wrapper for $f" for f in [simple_sparse_model] #, simple_lowrank_model]
+@testset "MOI wrapper for $f" for f in [simple_sparse_model, simple_lowrank_model]
     model, X, c = f()
     MOI.optimize!(model)
     simple_test(model, X, c)
 end
 
 function _test_limit(attr, val, term)
-    model, _, _ = simple_model()
+    model, _, _ = simple_sparse_model()
     MOI.set(model, MOI.RawOptimizerAttribute(attr), val)
     MOI.optimize!(model)
     @test MOI.get(model, MOI.TerminationStatus()) == term
@@ -111,7 +111,7 @@ end
 end
 
 @testset "continuity between solve" begin
-    model, X, c = simple_model()
+    model, X, c = simple_sparse_model()
     MOI.set(model, MOI.RawOptimizerAttribute("majiter"), SDPLR.MAX_MAJITER - 2)
     @test MOI.get(model, MOI.RawOptimizerAttribute("majiter")) ==
           SDPLR.MAX_MAJITER - 2

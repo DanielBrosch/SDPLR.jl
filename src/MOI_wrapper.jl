@@ -14,14 +14,21 @@ const PIECES_MAP = Dict{String,Int}(
     "overallsc" => 8,
 )
 
-const SupportedSets =
-    Union{MOI.Nonnegatives,MOI.PositiveSemidefiniteConeTriangle}
+const _SetWithDotProd = MOI.SetWithDotProducts{
+    MOI.PositiveSemidefiniteConeTriangle,
+    MOI.TriangleVectorization{MOI.LowRankMatrix{Cdouble}},
+}
+
+const SupportedSets = Union{
+    MOI.Nonnegatives,
+    MOI.PositiveSemidefiniteConeTriangle,
+    _SetWithDotProd,
+}
 
 mutable struct Optimizer <: MOI.AbstractOptimizer
     objective_constant::Float64
     objective_sign::Int
-    is_scalar_product::BitSet
-    variable_constraint::Vector{Int}
+    dot_product::Vector{Union{Nothing,MOI.LowRankMatrix{Cdouble}}}
     blksz::Vector{Cptrdiff_t}
     blktype::Vector{Cchar}
     varmap::Vector{Tuple{Int,Int,Int}} # Variable Index vi -> blk, i, j
@@ -50,8 +57,7 @@ mutable struct Optimizer <: MOI.AbstractOptimizer
         return new(
             0.0,
             1,
-            BitSet(),
-            Int[],
+            Union{Nothing,MOI.LowRankMatrix{Cdouble}}[],
             Cptrdiff_t[],
             Cchar[],
             Tuple{Int,Int,Int}[],
@@ -146,7 +152,7 @@ function _new_block(model::Optimizer, set::MOI.Nonnegatives)
     blk = length(model.blksz)
     for i in 1:MOI.dimension(set)
         push!(model.varmap, (blk, i, i))
-        push!(model.variable_constraint, 0)
+        push!(model.dot_product, nothing)
     end
     return
 end
@@ -158,9 +164,19 @@ function _new_block(model::Optimizer, set::MOI.PositiveSemidefiniteConeTriangle)
     for j in 1:set.side_dimension
         for i in 1:j
             push!(model.varmap, (blk, i, j))
-            push!(model.variable_constraint, 0)
+            push!(model.dot_product, nothing)
         end
     end
+    return
+end
+
+function _new_block(model::Optimizer, set::_SetWithDotProd)
+    blk = length(model.blksz) + 1
+    for i in eachindex(set.vectors)
+        push!(model.varmap, (-blk, i, i))
+        push!(model.dot_product, set.vectors[i].matrix)
+    end
+    _new_block(model, set.set)
     return
 end
 
@@ -190,7 +206,7 @@ end
 
 function MOI.supports_constraint(
     ::Optimizer,
-    ::Union{Type{MOI.SingleVariable},Type{MOI.ScalarAffineFunction{Cdouble}}},
+    ::Type{MOI.ScalarAffineFunction{Cdouble}},
     ::Type{MOI.EqualTo{Cdouble}},
 )
     return true
@@ -245,25 +261,46 @@ function _fill!(
 )
     for t in MOI.Utilities.canonical(func).terms
         blk, i, j = model.varmap[t.variable.value]
-        _fill_until(model, blk, entptr, type, length(ent))
-        coef = t.coefficient
-        if i != j
-            coef /= 2
+        _fill_until(model, abs(blk), entptr, type, length(ent))
+        if type[end] == Cchar('l')
+            error("Can either have one dot product variable or several normal variables in the same constraint")
         end
-        push!(ent, coef)
-        push!(row, i)
-        push!(col, j)
+        if blk < 0
+            type[end] = Cchar('l')
+            mat = model.dot_product[t.variable.value]
+            for i in eachindex(mat.diagonal)
+                push!(ent, mat.diagonal[i])
+                push!(row, i)
+                push!(col, i)
+            end
+            for j in axes(mat.factor, 2)
+                for i in axes(mat.factor, 1)
+                    push!(ent, mat.factor[i, j])
+                    push!(row, i)
+                    push!(col, j)
+                end
+            end
+        else
+            coef = t.coefficient
+            if i != j
+                coef /= 2
+            end
+            push!(ent, coef)
+            push!(row, i)
+            push!(col, j)
+        end
     end
     _fill_until(model, length(model.blksz), entptr, type, length(ent))
     @assert length(entptr) == length(model.blksz)
     @assert length(type) == length(model.blksz)
 end
 
-function _add_constraint(
+function MOI.add_constraint(
     model::Optimizer,
     func::MOI.ScalarAffineFunction{Cdouble},
     set::MOI.EqualTo{Cdouble},
 )
+    reset_solution!(model)
     push!(model.Ainfo_entptr, Csize_t[])
     push!(model.Ainfo_type, Cchar[])
     _fill!(
@@ -276,34 +313,7 @@ function _add_constraint(
         func,
     )
     push!(model.b, MOI.constant(set) - MOI.constant(func))
-    return length(model.b)
-end
-
-function MOI.add_constraint(
-    model::Optimizer,
-    func::MOI.ScalarAffineFunction{Cdouble},
-    set::MOI.EqualTo{Cdouble},
-)
-    reset_solution!(model)
-    index = _add_constraint(model, func, set)
-    return MOI.ConstraintIndex{typeof(func),typeof(set)}(index)
-end
-
-function MOI.add_constraint(
-    model::Optimizer,
-    vi::MOI.VariableIndex,
-    set::MOI.EqualTo{Cdouble},
-)
-
-    if !iszero(model.variable_constraint)
-        S = typeof(set)
-        throw(MOI.LowerBoundAlreadySet{S,S}(vi))
-    end
-    reset_solution!(model)
-    func = convert(MOI.ScalarAffineFunction{Cdouble}, vi)
-    index = _add_constraint(model, func, set)
-    model.variable_constraint[vi.value] = index
-    return MOI.ConstraintIndex{typeof(vi),typeof(set)}(vi.value)
+    return MOI.ConstraintIndex{typeof(func),typeof(set)}(length(model.b))
 end
 
 MOI.supports_incremental_interface(::Optimizer) = true
@@ -399,8 +409,7 @@ end
 function MOI.empty!(optimizer::Optimizer)
     optimizer.objective_constant = 0.0
     optimizer.objective_sign = 1
-    empty!(optimizer.is_scalar_product)
-    empty!(optimizer.variable_constraint)
+    empty!(optimizer.dot_product)
     empty!(optimizer.blksz)
     empty!(optimizer.blktype)
     empty!(optimizer.varmap)
@@ -530,16 +539,4 @@ function MOI.get(
 )
     MOI.check_result_index_bounds(optimizer, attr)
     return optimizer.lambda[ci.value]
-end
-
-function MOI.get(
-    optimizer::Optimizer,
-    attr::MOI.ConstraintDual,
-    ci::MOI.ConstraintIndex{
-        MOI.VariableIndex,
-        MOI.EqualTo{Cdouble},
-    },
-)
-    MOI.check_result_index_bounds(optimizer, attr)
-    return optimizer.lambda[optimizer.variable_constraint[ci.value]]
 end
