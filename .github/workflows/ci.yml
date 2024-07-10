@@ -40,7 +40,7 @@ jobs:
         run: |
           using Pkg
           Pkg.add([
-              PackageSpec(name="MathOptInterface", rev="master"),
+              PackageSpec(name="MathOptInterface", rev="bl/lmi"),
           ])
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
