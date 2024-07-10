@@ -4,7 +4,10 @@ import Random
 import MathOptInterface as MOI
 
 # This is `test_conic_PositiveSemidefiniteConeTriangle_VectorOfVariables`
-@testset "Solve simple with sdplrlib with $file" for file in ["simple_sparse.jl", "simple_lowrank.jl"]
+@testset "Solve simple with sdplrlib with $file" for file in [
+    "simple_sparse.jl",
+    "simple_lowrank.jl",
+]
     include(file)
     # The `925` seed is taken from SDPLR's `main.c`
     Random.seed!(925)
@@ -43,9 +46,11 @@ end
 function simple_lowrank_model()
     model = SDPLR.Optimizer()
     A = MOI.LowRankMatrix(
-        [-1/4, 1/4],
-        [-1.0 1.0
-          1.0 1.0]
+        [-1 / 4, 1 / 4],
+        [
+            -1.0 1.0
+            1.0 1.0
+        ],
     )
     X, _ = MOI.add_constrained_variables(
         model,
@@ -76,7 +81,8 @@ function simple_test(model, X, c)
     @test σ ≈ sigma
 end
 
-@testset "MOI wrapper for $f" for f in [simple_sparse_model, simple_lowrank_model]
+@testset "MOI wrapper for $f" for f in
+                                  [simple_sparse_model, simple_lowrank_model]
     model, X, c = f()
     MOI.optimize!(model)
     simple_test(model, X, c)

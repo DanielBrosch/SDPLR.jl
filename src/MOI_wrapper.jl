@@ -19,11 +19,8 @@ const _SetWithDotProd = MOI.SetWithDotProducts{
     MOI.TriangleVectorization{MOI.LowRankMatrix{Cdouble}},
 }
 
-const SupportedSets = Union{
-    MOI.Nonnegatives,
-    MOI.PositiveSemidefiniteConeTriangle,
-    _SetWithDotProd,
-}
+const SupportedSets =
+    Union{MOI.Nonnegatives,MOI.PositiveSemidefiniteConeTriangle,_SetWithDotProd}
 
 mutable struct Optimizer <: MOI.AbstractOptimizer
     objective_constant::Float64
@@ -263,7 +260,9 @@ function _fill!(
         blk, i, j = model.varmap[t.variable.value]
         _fill_until(model, abs(blk), entptr, type, length(ent))
         if type[end] == Cchar('l')
-            error("Can either have one dot product variable or several normal variables in the same constraint")
+            error(
+                "Can either have one dot product variable or several normal variables in the same constraint",
+            )
         end
         if blk < 0
             type[end] = Cchar('l')
