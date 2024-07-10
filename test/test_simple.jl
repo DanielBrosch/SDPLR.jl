@@ -4,8 +4,8 @@ import Random
 import MathOptInterface as MOI
 
 # This is `test_conic_PositiveSemidefiniteConeTriangle_VectorOfVariables`
-@testset "Solve simple with sdplrlib" begin
-    include("simple.jl")
+@testset "Solve simple with sdplrlib with $file" for file in ["simple_sparse.jl", "simple_lowrank.jl"]
+    include(file)
     # The `925` seed is taken from SDPLR's `main.c`
     Random.seed!(925)
     ret, R, lambda, ranks, pieces = SDPLR.solve(
@@ -26,7 +26,7 @@ import MathOptInterface as MOI
     @test ranks == Csize_t[2]
 end
 
-function simple_model()
+function simple_sparse_model()
     model = SDPLR.Optimizer()
     X, _ = MOI.add_constrained_variables(
         model,
@@ -38,6 +38,28 @@ function simple_model()
     MOI.set(model, MOI.ObjectiveFunction{typeof(obj)}(), obj)
     @test MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMIZE_NOT_CALLED
     return model, X, c
+end
+
+function simple_lowrank_model()
+    model = SDPLR.Optimizer()
+    A = MOI.LowRankMatrix(
+        [-1/4, 1/4],
+        [-1.0 1.0
+          1.0 1.0]
+    )
+    X, _ = MOI.add_constrained_variables(
+        model,
+        MOI.SetWithDotProducts(
+            MOI.PositiveSemidefiniteConeTriangle(2),
+            [MOI.TriangleVectorization(A)],
+        ),
+    )
+    c = MOI.add_constraint(model, X[4], MOI.EqualTo(1.0))
+    MOI.set(model, MOI.ObjectiveSense(), MOI.MIN_SENSE)
+    obj = 1.0 * X[1] + 1.0 * X[3]
+    MOI.set(model, MOI.ObjectiveFunction{typeof(obj)}(), obj)
+    @test MOI.get(model, MOI.TerminationStatus()) == MOI.OPTIMIZE_NOT_CALLED
+    return model, X[1:3], c
 end
 
 function simple_test(model, X, c)
@@ -54,8 +76,8 @@ function simple_test(model, X, c)
     @test σ ≈ sigma
 end
 
-@testset "MOI wrapper" begin
-    model, X, c = simple_model()
+@testset "MOI wrapper for $f" for f in [simple_sparse_model] #, simple_lowrank_model]
+    model, X, c = f()
     MOI.optimize!(model)
     simple_test(model, X, c)
 end
